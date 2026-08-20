@@ -1,3 +1,4 @@
+```
 CrashLoopBackOff — Example Error Outputs
 
 Four example kubectl describe pod <pod> outputs, each showing a different root cause.
@@ -188,6 +189,7 @@ Events:
 
 Signal: Pod stuck in Pending / ContainerCreating, Image ID never populates (container never starts), and Events repeatedly show FailedMount ... not found. Likely cause: ConfigMap/Secret not created, created in the wrong namespace, or name mismatch between the Deployment spec and the actual object.
 
+```
 
 
 ```mermaid
