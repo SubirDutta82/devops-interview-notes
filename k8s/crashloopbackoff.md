@@ -190,6 +190,114 @@ Events:
 Signal: Pod stuck in Pending / ContainerCreating, Image ID never populates (container never starts), and Events repeatedly show FailedMount ... not found. Likely cause: ConfigMap/Secret not created, created in the wrong namespace, or name mismatch between the Deployment spec and the actual object.
 
 ```
+```mermaid
+flowchart TD
+    Start([Pod enters CrashLoopBackOff]) --> Step1
+
+    subgraph Step1 [" 1. Confirm Pod State "]
+        A1["kubectl get pods"]
+        A2["Check RESTARTS count"]
+        A3["Single pod or multiple pods affected?"]
+        A1 --> A2 --> A3
+    end
+
+    Step1 --> Step2
+
+    subgraph Step2 [" 2. Inspect Logs "]
+        B1["kubectl logs pod"]
+        B2["Container exits too fast?"]
+        B3["kubectl logs --previous pod"]
+        B4["Look for: stack traces, missing env vars, dependency failures"]
+        B1 --> B2
+        B2 -- Yes --> B3 --> B4
+        B2 -- No --> B4
+    end
+
+    Step2 --> Step3
+
+    subgraph Step3 [" 3. Describe Pod "]
+        C1["kubectl describe pod pod"]
+        C2{"Check Events for:"}
+        C3["Image pull errors"]
+        C4["Failed liveness/readiness probes"]
+        C5["Misconfigured env vars"]
+        C6["Volume mount / secret / configmap issues"]
+        C1 --> C2
+        C2 --> C3
+        C2 --> C4
+        C2 --> C5
+        C2 --> C6
+    end
+
+    Step3 --> Step4
+
+    subgraph Step4 [" 4. Correlate with Deployment "]
+        D1["Review recent deployment/statefulset changes"]
+        D2["kubectl rollout history deployment name"]
+        D3["Check CI/CD pipeline logs"]
+        D1 --> D2 --> D3
+    end
+
+    Step4 --> Decision{"Root Cause Identified?"}
+
+    Decision -- "Application panic" --> R1["Fix code / adjust startup args"]
+    Decision -- "Env misconfigured" --> R2["Correct env vars or secrets"]
+    Decision -- "Dependency missing" --> R3["Ensure service/DB reachable"]
+    Decision -- "Probe misconfigured" --> R4["Adjust liveness/readiness thresholds"]
+
+    R1 --> Step5
+    R2 --> Step5
+    R3 --> Step5
+    R4 --> Step5
+
+    subgraph Step5 [" 5. Remediate & Redeploy "]
+        E1["Apply fix"]
+        E2["Redeploy pod"]
+        E3["Monitor kubectl get pods -w until stable"]
+        E1 --> E2 --> E3
+    end
+
+    Step5 --> Step6
+
+    subgraph Step6 [" 6. Document & Prevent "]
+        F1["Record incident in runbooks"]
+        F2["Add alerts for probe failures & restart counts"]
+        F3["Add CI/CD checks for env vars & dependencies"]
+        F1 --> F2 --> F3
+    end
+
+    Step6 --> End([Pod Stable / Incident Closed])
+
+    classDef startEnd fill:#1b5e20,stroke:#000000,stroke-width:2px,color:#ffffff,font-weight:bold
+    classDef decision fill:#e65100,stroke:#000000,stroke-width:2px,color:#ffffff,font-weight:bold
+    classDef remediate fill:#0d47a1,stroke:#000000,stroke-width:2px,color:#ffffff,font-weight:bold
+    classDef node1 fill:#37474f,stroke:#000000,stroke-width:1px,color:#ffffff
+    classDef node2 fill:#4527a0,stroke:#000000,stroke-width:1px,color:#ffffff
+    classDef node3 fill:#00695c,stroke:#000000,stroke-width:1px,color:#ffffff
+    classDef node4 fill:#6a1b9a,stroke:#000000,stroke-width:1px,color:#ffffff
+    classDef node5 fill:#283593,stroke:#000000,stroke-width:1px,color:#ffffff
+    classDef node6 fill:#4e342e,stroke:#000000,stroke-width:1px,color:#ffffff
+    classDef checkNode fill:#c62828,stroke:#000000,stroke-width:2px,color:#ffffff,font-weight:bold
+
+    class Start,End startEnd
+    class Decision decision
+    class R1,R2,R3,R4 remediate
+    class A1,A2,A3 node1
+    class B1,B2,B3,B4 node2
+    class C1,C3,C4,C5,C6 node3
+    class C2 checkNode
+    class D1,D2,D3 node4
+    class E1,E2,E3 node5
+    class F1,F2,F3 node6
+
+    style Step1 fill:#102027,stroke:#000000,stroke-width:2px,color:#ffffff
+    style Step2 fill:#102027,stroke:#000000,stroke-width:2px,color:#ffffff
+    style Step3 fill:#102027,stroke:#000000,stroke-width:2px,color:#ffffff
+    style Step4 fill:#102027,stroke:#000000,stroke-width:2px,color:#ffffff
+    style Step5 fill:#102027,stroke:#000000,stroke-width:2px,color:#ffffff
+    style Step6 fill:#102027,stroke:#000000,stroke-width:2px,color:#ffffff
+```
+
 
 
 ```mermaid
