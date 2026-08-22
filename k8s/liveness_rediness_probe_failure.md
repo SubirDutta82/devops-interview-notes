@@ -145,6 +145,8 @@ kubectl exec <pod> -- time curl -s localhost:8080/healthz
 If probe duration tracks DB latency 1:1, that's the smoking gun — move readiness to a cached/async health check instead of a synchronous DB call on every hit.
 
 ```
+```
+
 
 ```mermaid
 
