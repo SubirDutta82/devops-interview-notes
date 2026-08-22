@@ -66,7 +66,85 @@ Fix: separate the concerns. Liveness never touches the DB. Readiness can check D
 
 ```
 
+```
+## Model Answer — Probe Failures (redesigned with commands)
 
+**1. Liveness vs. Readiness — the real distinction**
+
+A liveness probe should only answer *"is this process's own control flow stuck?"* — it should never call out to a database or downstream service. A readiness probe answers *"can this pod serve a request right now?"* — and can legitimately depend on downstream health.
+
+To see current probe config on a running pod:
+```bash
+kubectl get pod <pod> -o yaml | grep -A8 "livenessProbe\|readinessProbe"
+```
+
+**2. Fixing the GC-pause flapping (liveness too aggressive)**
+
+First, confirm it's actually liveness killing the pod and not something else:
+```bash
+kubectl describe pod <pod>                          # look for "Liveness probe failed" in Events
+kubectl get pod <pod> -o jsonpath='{.status.containerStatuses[0].restartCount}'
+kubectl logs <pod> --previous                        # see what the app was doing right before the kill
+```
+
+Correlate the timing against real GC pause data. If GC logging is enabled (`-Xlog:gc` on modern JVMs), pull the pause times directly:
+```bash
+kubectl exec <pod> -- jstat -gcutil <pid> 1000       # live GC utilization, sampled every second
+kubectl logs <pod> | grep "Pause Full\|Pause Young"  # if GC logs are being written to stdout
+```
+
+If pause durations line up with probe failures, fix the tolerance math:
+```yaml
+livenessProbe:
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3        # ~30s total tolerance vs. an 8s p99 GC pause
+startupProbe:
+  periodSeconds: 5
+  failureThreshold: 30       # handles JVM warm-up separately from steady-state liveness
+```
+
+**3. Fixing the OOM case — not a probe-tuning problem**
+
+Confirm the actual termination reason before assuming anything:
+```bash
+kubectl get pod <pod> -o jsonpath='{.status.containerStatuses[0].lastState.terminated.reason}'
+kubectl top pod <pod>                                 # current memory vs. limit, right now
+kubectl describe pod <pod> | grep -A3 "Last State"
+```
+
+If it confirms `OOMKilled`, this is a resourcing problem, not a probe problem — fix the requests/limits and alert on recurrence:
+```bash
+kubectl get pod <pod> -o jsonpath='{.spec.containers[0].resources}'
+```
+```promql
+increase(kube_pod_container_status_restarts_total[1h]) > 0
+  and kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} == 1
+```
+
+**4. Telling "probe misconfigured" apart from "genuinely unhealthy" — the metrics**
+
+```promql
+# Restart rate vs. real app errors — if restarts spike and errors don't, it's a probe problem
+rate(kube_pod_container_status_restarts_total[5m])
+rate(http_requests_total{status=~"5.."}[5m])
+
+# Probe latency creeping up toward the configured timeout
+rate(kubelet_probe_duration_seconds_sum[5m]) / rate(kubelet_probe_duration_seconds_count[5m])
+
+# CPU throttling — the most commonly missed cause of "fake unhealthy"
+rate(container_cpu_cfs_throttled_periods_total[5m])
+```
+
+**5. Health endpoint calling a downstream DB — the failure mode**
+
+Check whether the probe endpoint itself is slow, which is a strong signal it's doing synchronous downstream work:
+```bash
+kubectl exec <pod> -- time curl -s localhost:8080/healthz
+```
+If probe duration tracks DB latency 1:1, that's the smoking gun — move readiness to a cached/async health check instead of a synchronous DB call on every hit.
+
+```
 
 ```mermaid
 
