@@ -74,6 +74,7 @@ Fix: separate the concerns. Liveness never touches the DB. Readiness can check D
 A liveness probe should only answer *"is this process's own control flow stuck?"* — it should never call out to a database or downstream service. A readiness probe answers *"can this pod serve a request right now?"* — and can legitimately depend on downstream health.
 
 To see current probe config on a running pod:
+```
 ```bash
 kubectl get pod <pod> -o yaml | grep -A8 "livenessProbe\|readinessProbe"
 ```
