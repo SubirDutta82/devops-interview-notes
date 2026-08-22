@@ -167,40 +167,55 @@ One detail worth calling out for the interview answer itself: notice that **read
 
 ```mermaid
 flowchart TD
-    Start(["🚨 Pods restarting or<br/>being pulled from rotation"]) ==> Q1{"Is the pod being<br/>KILLED/RESTARTED,<br/>or just marked NOT READY?"}
+    Start(["🚨 Incident: wrong pod dying,<br/>wrong pod surviving GC pauses,<br/>OOM pod invisible to readiness"]) ==> P1
 
-    Q1 ==>|"Killed + restarted"| Q2{"Check kubelet events:<br/>Liveness probe failure?"}
-    Q1 ==>|"Marked NotReady only,<br/>container still running"| Q6{"Check EndpointSlice:<br/>Readiness probe failing?"}
+    P1["① LIVENESS vs READINESS<br/>Liveness = 'is my control flow stuck?'<br/>Readiness = 'can I serve right now?'<br/>━━━━━━━━━━━━━━━━━━━━━━<br/>kubectl get pod &lt;pod&gt; -o yaml | grep -A8<br/>'livenessProbe\\|readinessProbe'"]
 
-    Q2 ==>|Yes| Q3{"Correlate probe timeout<br/>with GC pause / CPU throttle<br/>metrics at same timestamp"}
-    Q3 ==>|"Probe timeout ≈ GC pause duration"| F1["🔵 FIX: Retune liveness math<br/>periodSeconds x failureThreshold<br/>&gt; p99.9 GC pause<br/>+ add startupProbe for JVM warmup"]
-    Q3 ==>|"App genuinely deadlocked<br/>(thread dump confirms)"| F2["🔴 NOT a probe problem —<br/>real bug: fix deadlock,<br/>liveness was correct to kill it"]
+    P1 ==> P2["② CONFIRM LIVENESS IS THE KILLER<br/>━━━━━━━━━━━━━━━━━━━━━━<br/>kubectl describe pod &lt;pod&gt;<br/>kubectl get pod &lt;pod&gt; -o jsonpath=<br/>'{.status.containerStatuses[0].restartCount}'<br/>kubectl logs &lt;pod&gt; --previous"]
 
-    Q2 ==>|"No — container OOMKilled"| Q4{"Check container status:<br/>lastState.reason == OOMKilled?"}
-    Q4 ==>|Yes| F3["🟢 FIX: This is capacity/app,<br/>not probes —<br/>right-size limits, add heap-aware<br/>readiness, HPA on memory"]
-    Q4 ==>|"No — other reason"| Q5["🟡 Check node conditions:<br/>evictions, node pressure,<br/>preemption"]
+    P2 ==> P3{"GC pauses correlate<br/>with probe failures?"}
 
-    Q6 ==>|Yes| Q7{"Does readiness endpoint<br/>call a downstream dependency<br/>synchronously?"}
-    Q7 ==>|"Yes — DB/cache call inline"| F4["🟣 FIX: Cache health state async,<br/>probe reads last-known-good<br/>— don't hammer a struggling DB"]
-    Q7 ==>|"No — pure local check"| F5["🟢 FIX: Correlate against app<br/>error rate / latency metrics<br/>to confirm it's a real backpressure signal"]
+    P3 ==>|"Yes — confirmed via"| P3a["kubectl exec &lt;pod&gt; -- jstat -gcutil &lt;pid&gt; 1000<br/>kubectl logs &lt;pod&gt; | grep 'Pause Full\\|Pause Young'"]
+    P3a ==> F1["🔵 FIX: Retune thresholds<br/>periodSeconds: 10 · failureThreshold: 3<br/>+ add startupProbe for JVM warmup<br/>(~30s tolerance vs 8s p99 pause)"]
 
-    Q6 ==>|"No — readiness is green<br/>but requests still fail"| F6["🔴 FIX: Readiness check is too shallow —<br/>add memory/backpressure signal,<br/>add preStop hook to drain in-flight requests"]
+    P3 ==>|"No — real deadlock<br/>(thread dump confirms)"| F2["🔴 NOT a probe problem —<br/>fix the deadlock;<br/>liveness was correct to kill it"]
+
+    P1 ==> P4["③ CONFIRM OOM, NOT PROBE<br/>━━━━━━━━━━━━━━━━━━━━━━<br/>kubectl get pod &lt;pod&gt; -o jsonpath=<br/>'{.status.containerStatuses[0].lastState.terminated.reason}'<br/>kubectl top pod &lt;pod&gt;"]
+
+    P4 ==>|"reason == OOMKilled"| F3["🟢 FIX: Capacity problem, not probes —<br/>right-size resources.requests/limits,<br/>add heap-aware readiness,<br/>alert via PromQL below"]
+
+    F3 -.-> M1["increase(kube_pod_container_status_restarts_total[1h]) &gt; 0<br/>and kube_pod_container_status_last_terminated_reason<br/>{reason='OOMKilled'} == 1"]
+
+    P1 ==> P5["④ PROBE MISCONFIG vs GENUINE UNHEALTH<br/>━━━━━━━━━━━━━━━━━━━━━━<br/>rate(kube_pod_container_status_restarts_total[5m])<br/>rate(http_requests_total{status=~'5..'}[5m])<br/>rate(kubelet_probe_duration_seconds_sum[5m]) /<br/>rate(kubelet_probe_duration_seconds_count[5m])<br/>rate(container_cpu_cfs_throttled_periods_total[5m])"]
+
+    P5 ==>|"restarts↑ but<br/>errors flat"| F4["🟡 FIX: Probe config issue —<br/>not an app health issue"]
+    P5 ==>|"probe duration near<br/>timeout + CPU throttled"| F5["🟠 FIX: Probe performance issue —<br/>raise CPU limits or timeoutSeconds"]
+
+    P1 ==> P6["⑤ HEALTH ENDPOINT CALLING A DB<br/>━━━━━━━━━━━━━━━━━━━━━━<br/>kubectl exec &lt;pod&gt; -- time curl -s<br/>localhost:8080/healthz"]
+
+    P6 ==>|"probe duration tracks<br/>DB latency 1:1"| F6["🟣 FIX: Cache health state async —<br/>readiness reads last-known-good,<br/>never a synchronous DB call per probe hit"]
 
     classDef startEnd fill:#2E7D32,stroke:#A5FFB0,stroke-width:4px,color:#ffffff,font-weight:bold
+    classDef step fill:#0B5FA5,stroke:#7FD4FF,stroke-width:4px,color:#ffffff,font-weight:bold
     classDef decision fill:#B8860B,stroke:#FFE066,stroke-width:3px,color:#ffffff,font-weight:bold
+    classDef metric fill:#5B2C87,stroke:#D4A5FF,stroke-width:3px,color:#ffffff,font-weight:bold
     classDef fixBlue fill:#0B5FA5,stroke:#7FD4FF,stroke-width:4px,color:#ffffff,font-weight:bold
     classDef fixRed fill:#A61E1E,stroke:#FF8080,stroke-width:4px,color:#ffffff,font-weight:bold
     classDef fixGreen fill:#0E7C61,stroke:#5EEBC3,stroke-width:4px,color:#ffffff,font-weight:bold
     classDef fixPurple fill:#5B2C87,stroke:#D4A5FF,stroke-width:4px,color:#ffffff,font-weight:bold
-    classDef fixYellow fill:#8A6D00,stroke:#FFE066,stroke-width:3px,color:#ffffff,font-weight:bold
+    classDef fixYellow fill:#8A6D00,stroke:#FFE066,stroke-width:4px,color:#ffffff,font-weight:bold
+    classDef fixOrange fill:#B8460E,stroke:#FFB380,stroke-width:4px,color:#ffffff,font-weight:bold
 
     class Start startEnd
-    class Q1,Q2,Q3,Q4,Q6,Q7 decision
-    class Q5 fixYellow
+    class P1,P2,P4,P5,P6 step
+    class P3 decision
+    class P3a,M1 metric
     class F1 fixBlue
-    class F2,F6 fixRed
-    class F3,F5 fixGreen
-    class F4 fixPurple
+    class F2 fixRed
+    class F3 fixGreen
+    class F4 fixYellow
+    class F5 fixOrange
+    class F6 fixPurple
 ```
 
 ```
