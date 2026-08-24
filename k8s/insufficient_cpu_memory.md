@@ -3,6 +3,8 @@
 Pods stay stuck in `Pending` with "Insufficient cpu" / "Insufficient memory" events for a handful of distinct underlying reasons. Here's a breakdown of the common causes:
 
 ```
+```
+```
 1. Cluster genuinely lacks capacity
 - No node has enough allocatable CPU/memory for the pod's `requests` — not the actual usage, but the sum of all requests already scheduled on each node.
 - Cluster autoscaler is absent, disabled, or capped (`maxNodes` already reached), so no new node gets added to relieve pressure.
@@ -157,7 +159,7 @@ Note: the node-headroom percentage check is a simplified placeholder — real en
 
 ```
 
-```
+```bash
 #!/bin/bash
 # ==========================================================
 # Pod Pending (Insufficient CPU/Memory) - Diagnostic Test Flow
@@ -436,8 +438,8 @@ This mindmap breaks the issue into 9 root-cause categories:
 This maps directly onto the earlier flowchart: each branch here is a why, and the flowchart is the how to find out which one it is.
 
 ```
-
 ```
+```mermaid
 flowchart TD
     ROOT["🚨 Pod Pending<br/>Insufficient CPU/Memory"]:::rootStyle
 
