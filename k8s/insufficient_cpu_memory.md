@@ -1,47 +1,47 @@
 
 
-Pods stay stuck in `Pending` with "Insufficient cpu" / "Insufficient memory" events for a handful of distinct underlying reasons. Here's a breakdown of the common causes:
+**Scenario**: Pods stay stuck in `Pending` with `"Insufficient cpu" / "Insufficient memory"` events for a handful of distinct underlying reasons. Here's a breakdown of the common causes:
 
-1. Cluster genuinely lacks capacity
+1. **Cluster genuinely lacks capacity**
 - No node has enough allocatable CPU/memory for the pod's `requests` — not the actual usage, but the sum of all requests already scheduled on each node.
 - Cluster autoscaler is absent, disabled, or capped (`maxNodes` already reached), so no new node gets added to relieve pressure.
 - Node pool/instance type mismatch — the pod needs a GPU, large memory, or specific instance family that doesn't exist in any node group.
 
-2. Requests are set too high (over-provisioning)
+2. **Requests are set too high (over-provisioning)**
 - Developers set generous `resources.requests` "just to be safe," and no single node can satisfy that request even though real usage is low.
 - Vertical Pod Autoscaler or a manifest template inflated requests without anyone noticing.
 
-3. Resource fragmentation
+3. **Resource fragmentation**
 - Enough total free CPU/memory exists across the cluster, but it's scattered in small pockets on many nodes — no single node has enough contiguous allocatable capacity for one pod.
 
-4. Node-level reservations eating into allocatable resources
+4. **Node-level reservations eating into allocatable resources**
 - `kube-reserved`, `system-reserved`, and eviction thresholds reduce "allocatable" below what raw node capacity suggests.
 - DaemonSets (logging agents, CNI, service mesh sidecar injectors) consume requests on every node, shrinking what's left for regular pods.
 
-5. Taints, tolerations, affinity/anti-affinity, and topology constraints
+5. **Taints, tolerations, affinity/anti-affinity, and topology constraints**
 - Nodes with free capacity exist but are tainted (e.g., dedicated node pools) and the pod lacks matching tolerations.
 - nodeSelector / nodeAffinity restricts scheduling to a subset of nodes that happen to be full.
 - Pod anti-affinity or topology spread constraints prevent packing pods together even when raw resources are available.
 - PodDisruptionBudgets combined with autoscaler scale-down can create races where capacity briefly disappears.
 
-6. Namespace or cluster-level policy limits
+6. **Namespace or cluster-level policy limits**
 - ResourceQuota on the namespace caps total CPU/memory requests — even if nodes have room, the pod is blocked at admission/scheduling.
 - LimitRange defaults conflict with what the pod needs.
 
-7. Autoscaler is present but too slow or broken
+7. **Autoscaler is present but too slow or broken**
 - Scale-up is in progress but takes minutes (cloud provider provisioning delay) — pod looks "stuck" but will resolve.
 - Autoscaler is misconfigured: wrong IAM permissions, cloud API quota exhausted (e.g., vCPU quota limit on AWS/GCP/Azure), so it tries to add nodes and fails silently.
 - Autoscaler's node group templates don't match what the scheduler thinks it needs (label/taint mismatch between ASG and actual node config).
 
-8. Bin-packing / scheduler scoring effects
+8. **Bin-packing / scheduler scoring effects**
 - Scheduler filters out nodes correctly but scoring plugins (e.g., `NodeResourcesFit`, `PodTopologySpread`) combined with many competing pending pods create a persistent queue where this particular pod never wins the scheduling race.
 
-9. Pending pods hidden by unrelated PVC/binding issues
+9. **Pending pods hidden by unrelated PVC/binding issues**
 - Sometimes reported as "Insufficient CPU/Memory" but the actual root blocker is an unbound PersistentVolumeClaim or an image pull happening after scheduling — check the full event list, not just the top line, since multiple predicates can fail simultaneously and only the resource one gets displayed.
 
 ---
 
-How to diagnose quickly
+**How to diagnose quickly**
 
 
 
@@ -55,12 +55,12 @@ kubectl get pdb -n <namespace>
 
 
 
-### Troubleshooting flow diagram
+**Troubleshooting flow diagram**
 
 
 
 
-Colors are grouped by category so the logic is easy to scan: red = problem trigger, blue = diagnostic commands, yellow = decision points, purple = autoscaler fixes, orange = scheduling/affinity fixes, teal = quota/config fixes, green = resolved.
+Colors are grouped by category so the logic is easy to scan: `red = problem trigger`, `blue = diagnostic commands`, `yellow = decision points`, `purple = autoscaler fixes`, `orange = scheduling/affinity fixes`, `teal = quota/config fixes`, `green = resolved`.
 
 
 
@@ -138,21 +138,22 @@ flowchart TD
 ```
 
 
-This script converts the flowchart into runnable **IF / ELSE / THEN** logic:
+This script converts the flowchart into runnable `IF / ELSE / THEN` logic:
 
-1. IF pod status ≠ Pending → THEN exit (nothing to do).
-2. IF Events show image-pull or PVC issues → THEN flag that as the real root cause, not resources.
-3. IF a single node has headroom → THEN check taints/tolerations, nodeSelector/affinity, and anti-affinity in sequence; ELSE move to fragmentation/cluster-wide checks.
-4. IF Cluster Autoscaler is missing → THEN recommend adding one; ELSE parse its logs for maxNodes, quota, IAM, or instance-type errors.
-5. IF ResourceQuota/LimitRange exist in the namespace → THEN flag them as possible blockers.
+1. `IF` pod status ≠ `Pending` → `THEN` exit (nothing to do).
+2. `IF` Events show image-pull or PVC issues → `THEN` flag that as the real root cause, not resources.
+3. `IF` a single node has headroom → `THEN` check `taints/tolerations`, `nodeSelector/affinity`, and `anti-affinity` in sequence; `ELSE` move to `fragmentation/cluster-wide` checks.
+4. `IF` Cluster Autoscaler is missing → THEN recommend adding one; ELSE parse its logs for maxNodes, quota, IAM, or instance-type errors.
+5. `IF` ResourceQuota/LimitRange exist in the `namespace` → `THEN` flag them as possible blockers.
 
-Run it with:
-
+**Run it with:**
+```bash
 chmod +x pod-pending-diagnose.sh
 ./pod-pending-diagnose.sh <pod-name> <namespace>
+```
 
 
-Note: the node-headroom percentage check is a simplified placeholder — real environments should compare parsed `requests` against `allocatable` values numerically (e.g., with `kubectl top nodes` or a JSON-based parser) rather than scraping the human-readable `describe` output.
+**Note**: the node-headroom percentage check is a simplified placeholder — real environments should compare parsed `requests` against `allocatable` values numerically (e.g., with `kubectl top nodes` or a JSON-based parser) rather than scraping the human-readable `describe` output.
 
 
 
@@ -317,7 +318,7 @@ echo "=================================================="
 Here's the command sequence, in the order you'd actually run them:
 
 
-1. Confirm the pod is Pending and see the reason
+1. **Confirm the pod is Pending and see the reason**
 
 
 ```bash
@@ -326,40 +327,40 @@ kubectl describe pod <pod-name> -n <namespace>
 ```
 (Check the `Events:` section at the bottom — look for `FailedScheduling`, `Insufficient cpu`, `Insufficient memory`.)
 
-2. Check what the pod is actually requesting
+2. **Check what the pod is actually requesting**
 ```bash
 kubectl get pod <pod-name> -n <namespace> -o jsonpath='{.spec.containers[*].resources}'
 ```
 
-3. Check node-level capacity and allocation
+3. **Check node-level capacity and allocation**
 ```bash
 kubectl get nodes
 kubectl describe nodes | grep -A5 "Allocated resources"
 kubectl top nodes                    # requires metrics-server
 ```
 
-4. Check per-node allocatable vs capacity (raw numbers)
+4. **Check per-node allocatable vs capacity (raw numbers)**
 ```bash
 kubectl get nodes -o json | jq '.items[] | {name:.metadata.name, allocatable:.status.allocatable}'
 ```
 
-5. Check taints on nodes vs pod tolerations
+5. **Check taints on nodes vs pod tolerations**
 ```bash
 kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{": "}{.spec.taints}{"\n"}{end}'
 kubectl get pod <pod-name> -n <namespace> -o jsonpath='{.spec.tolerations}'
 ```
 
-6. Check nodeSelector / affinity / anti-affinity on the pod
+6. **Check nodeSelector / affinity / anti-affinity on the pod**
 ```bash
 kubectl get pod <pod-name> -n <namespace> -o yaml | grep -A10 "nodeSelector\|affinity"
 ```
 
-7. Check topology spread constraints
+7. **Check topology spread constraints**
 ```bash
 kubectl get pod <pod-name> -n <namespace> -o jsonpath='{.spec.topologySpreadConstraints}'
 ```
 
-8. Check ResourceQuota and LimitRange in the namespace
+8. **Check ResourceQuota and LimitRange in the namespace**
 ```bash
 kubectl get resourcequota -n <namespace>
 kubectl describe resourcequota -n <namespace>
@@ -367,70 +368,70 @@ kubectl get limitrange -n <namespace>
 kubectl describe limitrange -n <namespace>
 ```
 
-9. Check DaemonSets and reserved capacity eating into allocatable
+9. **Check DaemonSets and reserved capacity eating into allocatable**
 ```bash
 kubectl get daemonsets --all-namespaces
 kubectl describe node <node-name> | grep -A20 "Non-terminated Pods"
 ```
 
-10. Check Cluster Autoscaler status and logs
+10. **Check Cluster Autoscaler status and logs**
 ```bash
 kubectl get pods -n kube-system -l app=cluster-autoscaler
 kubectl logs -n kube-system -l app=cluster-autoscaler --tail=200
 kubectl get configmap cluster-autoscaler-status -n kube-system -o yaml
 ```
 
-11. Check node group / instance limits at the cloud provider
+11. **Check node group / instance limits at the cloud provider**
 
-AWS (EKS / ASG):
+`AWS (EKS / ASG):`
 ```bash
 aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names <asg-name>
 aws service-quotas get-service-quota --service-code ec2 --quota-code L-1216C47A   # vCPU quota
 ```
-GCP (GKE):
+`GCP (GKE):`
 ```bash
 gcloud container node-pools describe <pool-name> --cluster <cluster-name>
 gcloud compute project-info describe --project <project-id>   # quotas
 ```
-Azure (AKS):
+`Azure (AKS):`
 ```bash
 az aks nodepool show --resource-group <rg> --cluster-name <cluster> --name <pool-name>
 az vm list-usage --location <region>   # quota/usage
 ```
 
-12. Check scheduler logs directly (if all else is inconclusive)
+12. **Check scheduler logs directly (if all else is inconclusive)**
 ```bash
 kubectl logs -n kube-system -l component=kube-scheduler --tail=200
 ```
 
-13. Check PodDisruptionBudgets (can interact with scale-down/scale-up timing)
+13. **Check PodDisruptionBudgets (can interact with scale-down/scale-up timing)**
 ```bash
 kubectl get pdb -n <namespace>
 kubectl describe pdb <pdb-name> -n <namespace>
 ```
 
-14. Watch scheduling live (useful once you've made a fix)
+14. **Watch scheduling live (useful once you've made a fix)**
 ```bash
 kubectl get events -n <namespace> --watch
 kubectl get pod <pod-name> -n <namespace> --watch
 ```
 
-Run 1–4 first — they tell you whether it's genuinely a capacity problem. If yes, jump to 10–11 (autoscaler/cloud quota). If a node has room but the pod still won't land there, jump to 5–7 (taints/affinity). Steps 8–9 and 13 are worth checking in parallel since they can silently block scheduling even when nodes look fine.
+Run `1–4` first — they tell you whether it's genuinely a `capacity problem`. If yes, jump to `10–11` `(autoscaler/cloud quota)`. If a node has room but the `pod` still won't land there, jump to `5–7` `(taints/affinity)`. Steps `8–9` and `13` are worth checking in parallel since they can silently block `scheduling` even when `nodes` look fine.
 
 
 
 
-This mindmap breaks the issue into 9 root-cause categories:
+**This mindmap breaks the issue into `9` root-cause categories:**
 
-1. Genuine capacity shortage — cluster is actually full or lacks the right instance type
-2. Over-provisioned requests — requests set higher than real usage needs
-3. Resource fragmentation — free capacity exists but spread too thin across nodes
-4. Node reservations — kube-reserved, eviction thresholds, and DaemonSets eating into allocatable
-5. Scheduling constraints — taints, affinity, anti-affinity, topology spread blocking placement
-6. Namespace policy limits — ResourceQuota/LimitRange capping what can be requested
-7. Autoscaler slow or broken — provisioning delay, quota limits, IAM errors, mismatched templates
-8. Scheduler scoring effects — pod repeatedly loses the scheduling race against competing pending pods
-9. Misleading root cause — the "resource" event masks an unrelated PVC or image-pull problem
+1. **Genuine capacity shortage** — cluster is actually full or lacks the right instance type
+2. **Over-provisioned requests** — requests set higher than real usage needs
+3. **Resource fragmentation** — free capacity exists but spread too thin across nodes
+4. **Node reservations** — kube-reserved, eviction thresholds, and DaemonSets eating into allocatable
+5. **Scheduling constraints** — taints, affinity, anti-affinity, topology spread blocking placement
+6. **Namespace policy limits** — ResourceQuota/LimitRange capping what can be requested
+7. **Autoscaler slow or broken** — provisioning delay, quota limits, IAM errors, mismatched templates
+8. **Scheduler scoring effects** — pod repeatedly loses the scheduling race against competing pending pods
+9. **Misleading root cause** — the `"resource"` event masks an unrelated PVC or image-pull problem
 
 This maps directly onto the earlier flowchart: each branch here is a why, and the flowchart is the how to find out which one it is.
 
