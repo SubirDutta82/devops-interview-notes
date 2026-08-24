@@ -1,10 +1,7 @@
 
-```
+
 Pods stay stuck in `Pending` with "Insufficient cpu" / "Insufficient memory" events for a handful of distinct underlying reasons. Here's a breakdown of the common causes:
 
-```
-```
-```
 1. Cluster genuinely lacks capacity
 - No node has enough allocatable CPU/memory for the pod's `requests` — not the actual usage, but the sum of all requests already scheduled on each node.
 - Cluster autoscaler is absent, disabled, or capped (`maxNodes` already reached), so no new node gets added to relieve pressure.
@@ -46,8 +43,8 @@ Pods stay stuck in `Pending` with "Insufficient cpu" / "Insufficient memory" eve
 
 How to diagnose quickly
 
-```
-```
+
+
 ```bash
 kubectl describe pod <pod-name>       # look at Events section, "FailedScheduling"
 kubectl describe nodes | grep -A5 "Allocated resources"
@@ -57,15 +54,15 @@ kubectl get pdb -n <namespace>
 ```
 
 
-```
+
 ### Troubleshooting flow diagram
 
-```
 
-```
+
+
 Colors are grouped by category so the logic is easy to scan: red = problem trigger, blue = diagnostic commands, yellow = decision points, purple = autoscaler fixes, orange = scheduling/affinity fixes, teal = quota/config fixes, green = resolved.
 
-```
+
 
 ```mermaid
 flowchart TD
@@ -140,7 +137,7 @@ flowchart TD
 
 ```
 
-```
+
 This script converts the flowchart into runnable **IF / ELSE / THEN** logic:
 
 1. IF pod status ≠ Pending → THEN exit (nothing to do).
@@ -157,7 +154,7 @@ chmod +x pod-pending-diagnose.sh
 
 Note: the node-headroom percentage check is a simplified placeholder — real environments should compare parsed `requests` against `allocatable` values numerically (e.g., with `kubectl top nodes` or a JSON-based parser) rather than scraping the human-readable `describe` output.
 
-```
+
 
 ```bash
 #!/bin/bash
@@ -316,10 +313,10 @@ echo "=================================================="
 
 ```
 
-```
+
 Here's the command sequence, in the order you'd actually run them:
 
-```
+
 1. Confirm the pod is Pending and see the reason
 
 
@@ -420,9 +417,9 @@ kubectl get pod <pod-name> -n <namespace> --watch
 
 Run 1–4 first — they tell you whether it's genuinely a capacity problem. If yes, jump to 10–11 (autoscaler/cloud quota). If a node has room but the pod still won't land there, jump to 5–7 (taints/affinity). Steps 8–9 and 13 are worth checking in parallel since they can silently block scheduling even when nodes look fine.
 
-```
 
-```
+
+
 This mindmap breaks the issue into 9 root-cause categories:
 
 1. Genuine capacity shortage — cluster is actually full or lacks the right instance type
@@ -437,8 +434,8 @@ This mindmap breaks the issue into 9 root-cause categories:
 
 This maps directly onto the earlier flowchart: each branch here is a why, and the flowchart is the how to find out which one it is.
 
-```
-```
+
+
 ```mermaid
 flowchart TD
     ROOT["🚨 Pod Pending<br/>Insufficient CPU/Memory"]:::rootStyle
