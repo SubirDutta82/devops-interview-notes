@@ -1,5 +1,5 @@
 
-```
+
 **The question:**
 
 "We had an incident last quarter where a Java service running on Kubernetes started getting OOMKilled and restarted in a crash loop during peak traffic, but the readiness probe kept marking pods as healthy right up until they died — so the load balancer was still routing traffic to pods that were seconds away from getting killed. Meanwhile, a *different* service on the same cluster had the opposite problem: its liveness probe was too aggressive, and pods were getting killed and restarted during normal GC pauses, even though the service was fine.
@@ -12,7 +12,7 @@ Walk me through how you'd diagnose and fix both of these. Specifically:
 4. How would you tell the difference, from Grafana/Prometheus metrics alone, between 'probe is misconfigured' and 'the app itself is genuinely unhealthy'?
 5. If your health check endpoint itself makes a downstream DB call, what failure mode does that introduce, and how do you avoid it?"
 
----
+
 ## Model Answer
 
 **1. Liveness vs. Readiness — the real distinction**
@@ -50,7 +50,7 @@ This creates a **cascading failure amplifier**: if the DB gets slow (not down, j
 
 Fix: separate the concerns. Liveness never touches the DB. Readiness can check DB connectivity but should use a **cached/async health state** (a background goroutine/thread pings the DB every N seconds and the probe just reads the last known state) rather than making a synchronous DB call on every probe hit — so probe traffic itself doesn't add load to an already-struggling DB, and a DB blip doesn't instantly cascade into every pod being pulled from rotation at once.
 
----
+
 
 ## The 5 Ws
 
@@ -64,9 +64,7 @@ Fix: separate the concerns. Liveness never touches the DB. Readiness can check D
 
 **Why** this question gets asked — because probe misconfiguration is one of the most common **self-inflicted** outages in Kubernetes shops: nobody attacked the system, no dependency truly failed, the platform itself killed healthy capacity. Interviewers use it because it cheaply reveals whether a candidate has actually debugged a crash-loop at 2am or has only ever read the Kubernetes docs page on probes.
 
-```
 
-```
 ## Model Answer — Probe Failures (redesigned with commands)
 
 **1. Liveness vs. Readiness — the real distinction**
@@ -74,7 +72,7 @@ Fix: separate the concerns. Liveness never touches the DB. Readiness can check D
 A liveness probe should only answer *"is this process's own control flow stuck?"* — it should never call out to a database or downstream service. A readiness probe answers *"can this pod serve a request right now?"* — and can legitimately depend on downstream health.
 
 To see current probe config on a running pod:
-```
+
 ```bash
 kubectl get pod <pod> -o yaml | grep -A8 "livenessProbe\|readinessProbe"
 ```
@@ -82,6 +80,7 @@ kubectl get pod <pod> -o yaml | grep -A8 "livenessProbe\|readinessProbe"
 **2. Fixing the GC-pause flapping (liveness too aggressive)**
 
 First, confirm it's actually liveness killing the pod and not something else:
+
 ```bash
 kubectl describe pod <pod>                          # look for "Liveness probe failed" in Events
 kubectl get pod <pod> -o jsonpath='{.status.containerStatuses[0].restartCount}'
@@ -89,12 +88,14 @@ kubectl logs <pod> --previous                        # see what the app was doin
 ```
 
 Correlate the timing against real GC pause data. If GC logging is enabled (`-Xlog:gc` on modern JVMs), pull the pause times directly:
+
 ```bash
 kubectl exec <pod> -- jstat -gcutil <pid> 1000       # live GC utilization, sampled every second
 kubectl logs <pod> | grep "Pause Full\|Pause Young"  # if GC logs are being written to stdout
 ```
 
 If pause durations line up with probe failures, fix the tolerance math:
+
 ```yaml
 livenessProbe:
   periodSeconds: 10
@@ -108,6 +109,7 @@ startupProbe:
 **3. Fixing the OOM case — not a probe-tuning problem**
 
 Confirm the actual termination reason before assuming anything:
+
 ```bash
 kubectl get pod <pod> -o jsonpath='{.status.containerStatuses[0].lastState.terminated.reason}'
 kubectl top pod <pod>                                 # current memory vs. limit, right now
@@ -115,9 +117,11 @@ kubectl describe pod <pod> | grep -A3 "Last State"
 ```
 
 If it confirms `OOMKilled`, this is a resourcing problem, not a probe problem — fix the requests/limits and alert on recurrence:
+
 ```bash
 kubectl get pod <pod> -o jsonpath='{.spec.containers[0].resources}'
 ```
+
 ```promql
 increase(kube_pod_container_status_restarts_total[1h]) > 0
   and kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} == 1
@@ -140,13 +144,13 @@ rate(container_cpu_cfs_throttled_periods_total[5m])
 **5. Health endpoint calling a downstream DB — the failure mode**
 
 Check whether the probe endpoint itself is slow, which is a strong signal it's doing synchronous downstream work:
+
 ```bash
 kubectl exec <pod> -- time curl -s localhost:8080/healthz
 ```
 If probe duration tracks DB latency 1:1, that's the smoking gun — move readiness to a cached/async health check instead of a synchronous DB call on every hit.
 
-```
-```
+
 
 
 ```mermaid
@@ -219,7 +223,7 @@ flowchart TB
 
 ```
 
-```
+
 ## The core architecture pieces involved
 
 **kubelet** — runs on every node, is the *only* component that actually executes probes. It doesn't ask the API server "is this pod healthy" — it directly execs into or HTTP-calls the container itself, on the interval you configured.
@@ -244,7 +248,7 @@ Here's the full flow as a diagram:How to read it: the top path (steps 1–3a/3b)
 
 One detail worth calling out for the interview answer itself: notice that **readiness failing** only ever changes the EndpointSlice/iptables rules (traffic routing) — it never restarts anything. Only **liveness failing** reaches the container runtime and causes a kill/restart. Candidates who mix this up (say readiness failure restarts the pod) are an easy tell for an interviewer that the person hasn't actually debugged this in production.
 
-```
+
 
 ```mermaid
 flowchart TD
@@ -299,11 +303,11 @@ flowchart TD
     class F6 fixPurple
 ```
 
-```
+
 Here's a decision-flow diagram of the **troubleshooting logic** from the model answer — i.e., how you'd actually walk through diagnosing and fixing either failure mode from scratch.The first fork (**killed vs. just not-ready**) is the single most important triage question in this entire diagram — it immediately tells you whether you're in liveness territory (restart path) or readiness territory (routing path), which is exactly the distinction most candidates blur under interview pressure.
 
 From there it branches into the two incidents from the original question:
 - **Left branch (liveness):** splits into "it's actually a probe tuning problem" (blue fix) vs. "the app is genuinely broken and the probe was right to kill it" (red — a trap a lot of candidates fall into by reflexively loosening thresholds instead of checking whether the kill was justified) vs. the OOM path, which explicitly routes to **"not a probe problem at all"** (green).
 - **Right branch (readiness):** the DB-call-in-health-check trap gets its own dedicated fork (purple fix — async caching), and the bottom-right red box is the OOM-adjacent case where readiness was blind to a real problem, mapping back to answer #3's "make readiness backpressure-aware" fix.
-```
+
 
