@@ -43,10 +43,9 @@ Pods stay stuck in `Pending` with "Insufficient cpu" / "Insufficient memory" eve
 
 ### How to diagnose quickly
 
-```
 kubectl describe pod <pod-name>       # look at Events section, "FailedScheduling"
 kubectl describe nodes | grep -A5 "Allocated resources"
 kubectl get resourcequota -n <namespace>
 kubectl get pdb -n <namespace>
-```
+
 ```
