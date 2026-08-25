@@ -169,6 +169,95 @@ sequenceDiagram
 
     Note over Kern: Pod is running as an isolated,<br/>resource-limited process and<br/>reachable through the Service VIP
 ```
+---
+
+Here's a step-by-step walkthrough of what's actually happening at each line of that sequence diagram — this is the real, literal chronological order of events when a pod starts.
+
+## Step 1-4: Object Creation (kubectl → API Server → etcd)
+
+**1. `kubectl` → API Server: POST Pod spec**
+You run `kubectl apply -f pod.yaml`. This gets serialized into JSON and sent as an HTTPS request to the API server. `kubectl` itself does nothing clever — it's just a REST client.
+
+**2. API Server: authn / authz / admission webhooks**
+The API server runs the request through a pipeline before touching storage:
+- **Authentication** — who is this? (client cert, bearer token, OIDC)
+- **Authorization** — is this identity allowed to `create` pods in this namespace? (RBAC check)
+- **Admission control** — mutating webhooks can modify the object (e.g., inject a sidecar, set default resource limits), then validating webhooks can reject it outright (e.g., OPA/Kyverno blocking `:latest` tags or privileged containers)
+
+**3. API Server → etcd: write Pod object**
+Only now does the API server write the object to etcd, as a key like `/registry/pods/default/mypod`. At this point `pod.spec.nodeName` is empty — the pod exists conceptually but has nowhere to run.
+
+**4. API Server → kubectl: 201 Created**
+Your `kubectl apply` returns successfully. Note: this just means "the object was accepted and stored" — it says nothing about whether it will actually run successfully.
+
+## Step 5-8: Scheduling
+
+**5-6. Scheduler watches, filters, and scores**
+The scheduler holds an open watch connection to the API server, filtered for pods where `nodeName` is unset. It picks this new pod up almost instantly. It then runs two phases:
+- **Filter/Predicate phase**: eliminate nodes that can't work — insufficient CPU/memory, taints the pod doesn't tolerate, node selector mismatch, port conflicts
+- **Score/Priority phase**: rank the surviving nodes — least requested resources, spread across zones/nodes for HA, affinity/anti-affinity preferences
+
+**7-8. Scheduler writes Binding → etcd persists it**
+The scheduler doesn't call the node directly — it just writes a `Binding` subresource back to the API server, setting `pod.spec.nodeName = NodeX`. That's it. The scheduler's job is now done; it never talks to kubelet.
+
+## Step 9-10: kubelet Picks It Up
+
+**9-10. kubelet watches → API server delivers the spec**
+kubelet on NodeX has its own watch open, filtered to `nodeName == NodeX`. The moment the binding is written, kubelet's watch fires and it receives the full pod spec. This is the first moment the *node itself* knows anything about this pod.
+
+## Step 11-14: Handing Off to the Container Runtime
+
+**11. kubelet → containerd: CRI RunPodSandbox**
+Before starting any app container, kubelet asks the runtime to create the **pod sandbox** — this is what actually sets up the shared network namespace that all containers in the pod will join (this is why containers in a pod share `localhost`).
+
+**12. kubelet → containerd: CreateContainer/StartContainer**
+For each container in the pod spec (init containers first, in order, then main containers), kubelet issues these CRI calls.
+
+**13. containerd: pull image, unpack, build OCI bundle**
+containerd pulls the image layers if not cached, unpacks them via OverlayFS, and assembles the **OCI bundle**: a rootfs directory plus a `config.json` that precisely describes what the kernel should do — which namespaces, which cgroup path, which capabilities, which seccomp profile.
+
+**14. containerd → runc: create/start**
+containerd hands this bundle off to `runc`, the low-level OCI runtime binary that will actually talk to the kernel.
+
+## Step 15-19: runc Makes It Real
+
+This is the part that's genuinely happening at the kernel level, not an abstraction:
+
+**15. `clone()`/`unshare()`** — creates the six namespaces (PID, NET, MNT, UTS, IPC, USER). This is the single syscall that makes a process believe it's alone on the machine.
+
+**16. Write PID to `cgroup.procs`** — this is the exact mechanism that turns your YAML's `resources.limits.memory: 512Mi` into an enforced kernel limit. runc writes the new process's PID into the cgroup hierarchy, and the kernel's memory controller starts tracking/enforcing from that point on.
+
+**17. Load seccomp-bpf filter, drop capabilities** — restricts which syscalls this process can even attempt, and strips root down from full power to a minimal capability set.
+
+**18. `pivot_root()`** — swaps the process's filesystem root into the unpacked image, so `/` inside the container is actually the image's rootfs on the host.
+
+**19. Kernel confirms: process running, isolated**
+At this exact moment, the "container" exists. It's genuinely just a Linux process — visible in `ps aux` on the host node — wrapped in namespaces and cgroups.
+
+## Step 20-22: Networking Gets Wired Up
+
+**20. kubelet → CNI: ADD**
+Separately from the runc work, kubelet calls the CNI plugin to network the pod sandbox.
+
+**21. CNI → kernel: netns, veth, IP, routes**
+The CNI plugin creates a veth pair (one end in the pod's network namespace, one on the host), assigns the pod its IP from the cluster CIDR, and adds routes so traffic can reach other nodes' pods.
+
+**22. Kernel confirms pod networking is ready**
+
+## Step 23-25: Becoming Reachable
+
+**23. kubelet → API server: status = Running, PodIP = x.x.x.x**
+kubelet reports back what actually happened. This is also when `kubectl get pods` starts showing `Running` and a real IP.
+
+**24. API server → kube-proxy: Endpoints updated**
+Any Service selecting this pod's labels now gets a new Endpoint entry containing this pod's IP. kube-proxy, which has its own watch on Services/Endpoints, picks this up immediately.
+
+**25. kube-proxy → kernel: update netfilter/IPVS/eBPF rules**
+kube-proxy programs new load-balancing rules so that traffic hitting the Service's virtual IP can now be DNAT'd to this pod's real IP alongside any siblings.
+
+
+**Why the order matters:** container creation (steps 11-19) and network setup (steps 20-22) are largely independent CRI/CNI calls — but the pod isn't truly "ready to serve traffic" until *all three* have completed: the process is running, its network namespace has an IP, and kube-proxy has propagated that IP into the Service's load-balancing rules. A pod can show `Running` in step 23 before step 25 finishes — which is exactly why a freshly-started pod can be up but briefly unreachable via its Service.
+
 
 ---
 
